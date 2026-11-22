@@ -16,3 +16,9 @@ SuperSync Lite is a personal SuperSync server for one owner syncing multiple dev
 ## Verification
 
 Exercise changed routes through the Worker against a locally migrated D1 database. For sync changes, use two client IDs and check what the second device receives after an upload, a repeated upload, and concurrent edits. Compare responses with the upstream contract and record the upstream revision used when reporting compatibility.
+
+## Agent skills
+
+- **Issue tracker** — Read and write specs and tickets as [local Markdown under `.scratch/`](docs/agents/issue-tracker.md).
+- **Triage** — Use the [project’s triage labels](docs/agents/triage-labels.md) when assigning a ticket status.
+- **Domain docs** — Consult the [glossary and architecture decision record conventions](docs/agents/domain.md) when discussing sync terminology or design decisions.
