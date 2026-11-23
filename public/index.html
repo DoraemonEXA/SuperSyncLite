@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SuperSync Lite</title>
+    <link rel="stylesheet" href="/portal.css" />
+    <script type="module" src="/portal.js"></script>
+  </head>
+  <body>
+    <header><strong>SuperSync Lite</strong><button id="logout" hidden>退出</button></header>
+    <main>
+      <section id="login" hidden>
+        <h1>登录</h1>
+        <form id="signin">
+          <label
+            >用户名<input name="username" required maxlength="64" autocomplete="username"
+          /></label>
+          <label
+            >身份验证器动态码<input
+              name="code"
+              required
+              pattern="[0-9]{6}"
+              maxlength="6"
+              inputmode="numeric"
+              autocomplete="one-time-code"
+          /></label>
+          <button>登录</button>
+        </form>
+      </section>
+      <section id="device" hidden>
+        <h1>连接设备</h1>
+        <p id="deviceName"></p>
+        <p>请与设备上显示的配对码核对。</p>
+        <output id="match"></output>
+        <div class="actions">
+          <button id="approve">批准连接</button><button id="cancel" class="secondary">拒绝</button>
+        </div>
+      </section>
+      <section id="account" hidden>
+        <h1>我的同步</h1>
+        <p id="who"></p>
+        <label>Server URL<input id="serverUrl" readonly /></label>
+        <button id="token">显示 Access Token</button
+        ><textarea id="access" readonly hidden aria-label="Access Token"></textarea>
+      </section>
+      <section id="admin" hidden>
+        <h2>用户管理</h2>
+        <form id="create">
+          <label
+            >新用户名<input
+              name="username"
+              required
+              maxlength="64"
+              pattern="[a-zA-Z0-9_.\-]+" /></label
+          ><button>创建用户并生成二维码</button>
+        </form>
+        <ul id="users"></ul>
+      </section>
+      <section id="enrollment" hidden>
+        <h2>绑定身份验证器</h2>
+        <p id="qrName"></p>
+        <img id="qr" alt="身份验证器绑定二维码" />
+        <p>请将此二维码私下交给该用户。关闭后需要重新发码才能再次绑定。</p>
+        <button id="dismiss" class="secondary">关闭二维码</button>
+      </section>
+      <p id="status" role="status" aria-live="polite"></p>
+    </main>
+  </body>
+</html>

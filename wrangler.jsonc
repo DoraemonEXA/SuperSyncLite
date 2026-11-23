@@ -1,0 +1,23 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "supersync-lite",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-19",
+  "compatibility_flags": ["nodejs_compat"],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "supersync-lite",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+    },
+  ],
+  "durable_objects": { "bindings": [{ "name": "ACCOUNTS", "class_name": "AccountHub" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["AccountHub"] }],
+  "assets": { "directory": "./public", "binding": "ASSETS", "run_worker_first": true },
+  "triggers": { "crons": ["31 3 * * *"] },
+  "vars": {
+    "CAPTURE_CONNECTOR_ENABLED": "false",
+    "PUBLIC_URL": "http://localhost:8787",
+    "CORS_ORIGINS": "https://app.super-productivity.com",
+  },
+}
