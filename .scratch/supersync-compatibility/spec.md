@@ -5,9 +5,10 @@ Run a multi-user SuperSync service on Cloudflare Workers with Cloudflare D1, usa
 ## Accounts and device setup
 
 - The deployment operator uses a local command to provision or recover the administrator. Administrators use a web interface to create users and hand each user their authenticator enrollment QR code.
-- Both roles sign in with a username and a six-digit TOTP. Public registration and email delivery are outside the service. The admin interface is limited to account management. Each user's devices share only that user's dataset.
+- Both roles sign in with a username and a six-digit TOTP on hosted Workers. The local Wrangler launcher permits username-only sign-in for a provisioned administrator. Public registration and email delivery are outside the service. The admin interface is limited to account management. Each user's devices share only that user's dataset.
 - Standard device setup starts in the client. The app opens `/?r=<requestId>` on the server. The user signs in, checks the match code and approves the device. The app receives its access token on its next successful poll. Also support entering the Server URL and Access Token in client settings. The enrollment QR code is for the user's authenticator.
 - Replacing a lost authenticator keeps that user's data and invalidates the old authenticator, web sessions and device authorizations. The user's other devices must reconnect. Other users continue syncing.
+- Users can revoke all their sync devices, including approved pairings awaiting collection. Their portal sessions and Capture authorizations continue working. They can manually generate a new token or approve a fresh pairing to reconnect to their dataset.
 
 The optional upstream Capture, MCP and OAuth routes are part of the implementation and follow the upstream feature switch.
 
@@ -20,13 +21,13 @@ The optional upstream Capture, MCP and OAuth routes are part of the implementati
 
 ## Local acceptance for v20.1.0
 
-The official release asset `app-play-release.apk`, SHA-256 `cc509b8d8db6587aa4f90bf9f293bdb7b9afeb4456a7865e4dff887ba5f496a3`, supplied the unmodified browser code. Two isolated Microsoft Edge sessions approved the browser pairing and exchanged encrypted tasks in both directions. A third session entered the URL and access token through Configure Sync and decrypted the same tasks. Run `npm run test:client` to repeat this against a local Worker and D1.
+The official release asset `app-play-release.apk`, SHA-256 `cc509b8d8db6587aa4f90bf9f293bdb7b9afeb4456a7865e4dff887ba5f496a3`, supplied the unmodified browser code. Two isolated Microsoft Edge sessions approved the browser pairing and exchanged encrypted tasks in both directions. After portal revocation, a third session entered the URL and a newly generated token through Configure Sync and decrypted the same tasks. Run `npm run test:client` to repeat this against a local Worker and D1.
 
 The local Worker tests cover full-size operation batches, cursors and request receipts, concurrent edits, account boundaries, snapshot chunking, repair and replacement fences, WebSocket fan-out and revocation, OAuth refresh and Capture delivery. Both the enabled and default-disabled Capture configurations were exercised. Separate CLI checks initialized one administrator, rejected a second initialization, and generated a fresh recovery QR. Remote Cloudflare infrastructure, native device runtimes and a scheduled run on GitHub are outside this local acceptance.
 
 ## Following new releases
 
-GitHub Actions checks the upstream stable release daily and on manual dispatch. It reports changes relative to the verified baseline. A maintainer initiates each upgrade.
+GitHub Actions checks the upstream stable release every Monday at 01:17 UTC and on manual dispatch. It reports changes relative to the verified baseline. A maintainer initiates each upgrade.
 
 ## References
 

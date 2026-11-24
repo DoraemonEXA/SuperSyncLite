@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { randomBytes, createHash, generateKeyPairSync } from 'node:crypto';
+import { randomBytes, createHash, createHmac, generateKeyPairSync } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
-import { createTestHarness } from 'wrangler';
+import { readFile } from 'node:fs/promises';
+import wrangler from 'wrangler';
 import { newEnrollment } from '../src/credentials.ts';
 
 import { currentCode } from './totp.mjs';
@@ -10,6 +11,7 @@ import { parseCapturePublicKey, sealCapture } from '../src/capture/capture-seal.
 
 import * as contract from '../src/shared/supersync-http-contract.ts';
 
+const { createTestHarness, experimental_readRawConfig, unstable_splitSqlQuery } = wrangler;
 const responseContracts = {
   'POST /api/sync/ops': contract.SuperSyncUploadOpsResponseSchema,
   'GET /api/sync/ops': contract.SuperSyncDownloadOpsResponseSchema,
@@ -78,7 +80,7 @@ test('v20.1.0 through the Worker and migrated D1', async (t) => {
     const {
       body: { token },
     } = await call('/web/token', { method: 'POST', cookie, body: {} });
-    return { token, cookie };
+    return { token, cookie, uri };
   };
   const admin = await login('admin', 1),
     alice = await login('alice'),
@@ -87,6 +89,10 @@ test('v20.1.0 through the Worker and migrated D1', async (t) => {
     call(path, { method: 'POST', token, body, ...extra });
   const get = (path, token) => call(path, { token });
   await t.test('OTP account management and one-time browser device claim', async () => {
+    assert.deepEqual((await get('/web/login-options')).body, { localAdminLogin: false });
+    for (const username of ['admin', 'alice']) {
+      await post('/web/login', undefined, { username, code: '' }, { expected: 401 });
+    }
     const { body: account } = await call('/web/users', {
       method: 'POST',
       cookie: admin.cookie,
@@ -117,6 +123,24 @@ test('v20.1.0 through the Worker and migrated D1', async (t) => {
     assert.deepEqual(responses.map((r) => r.body.status).sort(), ['approved', 'expired']);
     await get('/api/sync/status', responses.find((r) => r.body.token).body.token);
     await call('/api/sync/status', { expected: 401 });
+
+    const cancelled = (
+      await post('/api/connect/requests', undefined, {
+        deviceName: 'Tablet',
+        platform: 'web',
+      })
+    ).body;
+    const page = '/web/connect/' + cancelled.requestId;
+    await call(page, { token: alice.token, expected: 401 });
+    await post(page + '/cancel', undefined, {}, { cookie: alice.cookie });
+    assert.equal(
+      (
+        await post('/api/connect/requests/' + cancelled.requestId + '/poll', undefined, {
+          pollSecret: cancelled.pollSecret,
+        })
+      ).body.status,
+      'denied',
+    );
   });
   const payload = randomBytes(140).toString('base64');
   const makeOp = (client, id, clock, entity = 'task') => ({
@@ -274,6 +298,8 @@ test('v20.1.0 through the Worker and migrated D1', async (t) => {
     const {
       body: { code },
     } = await post('/api/capture/connect-code', bob.token, {});
+    await post('/web/token/revoke', undefined, {}, { cookie: bob.cookie });
+    bob.token = (await post('/web/token', undefined, {}, { cookie: bob.cookie })).body.token;
     const verifier = randomBytes(32).toString('base64url');
     const client_id = 'https://chatgpt.com/oauth/client.json',
       redirect_uri = 'https://chatgpt.com/connector_platform_oauth_redirect',
@@ -316,6 +342,7 @@ test('v20.1.0 through the Worker and migrated D1', async (t) => {
       refresh_token: tokens.refresh_token,
     };
     const fresh = (await form(refresh)).body;
+    await post('/api/capture/connect-code', bob.token, {});
     assert.equal((await form(refresh)).body.refresh_token, fresh.refresh_token);
     const list = await post('/mcp', fresh.access_token, {
       jsonrpc: '2.0',
@@ -363,6 +390,8 @@ test('v20.1.0 through the Worker and migrated D1', async (t) => {
       const {
         body: { grant, token },
       } = await post('/api/capture/tokens', bob.token, { clientName: 'Desktop integration' });
+      await post('/web/token/revoke', undefined, {}, { cookie: bob.cookie });
+      bob.token = (await post('/web/token', undefined, {}, { cookie: bob.cookie })).body.token;
       const grants = (await get('/api/capture/grants', bob.token)).body.grants;
       assert.ok(grants.some((g) => g.id === grant.id));
       const path = '/api/capture/grants/' + grant.id;
@@ -433,8 +462,45 @@ test('v20.1.0 through the Worker and migrated D1', async (t) => {
         ws.accept();
         return { ws, frames };
       };
+      function closeCode(ws) {
+        return new Promise((resolve, reject) => {
+          const timeout = setTimeout(
+            () => reject(new Error('WebSocket revocation timed out')),
+            25000,
+          );
+          ws.addEventListener(
+            'close',
+            (event) => {
+              clearTimeout(timeout);
+              resolve(event.code);
+            },
+            { once: true },
+          );
+        });
+      }
+      async function approvePairing() {
+        const { body: request } = await post('/api/connect/requests', undefined, {
+          deviceName: 'Device B',
+          platform: 'web',
+        });
+        const page = '/web/connect/' + request.requestId;
+        const poll = () =>
+          post('/api/connect/requests/' + request.requestId + '/poll', undefined, {
+            pollSecret: request.pollSecret,
+          });
+        assert.equal(
+          (await call(page, { cookie: alice.cookie })).body.matchCode,
+          request.matchCode,
+        );
+        assert.deepEqual((await poll()).body, { status: 'pending' });
+        await post(page + '/approve', undefined, {}, { cookie: alice.cookie });
+        return poll;
+      }
+      const claim = await approvePairing();
+      const paired = (await claim()).body.token;
+      const unclaimed = await approvePairing();
       const a = await open(alice.token, 'A'),
-        b = await open(alice.token, 'B'),
+        b = await open(paired, 'B'),
         other = await open(bob.token, 'B');
       try {
         a.ws.send(JSON.stringify({ type: 'presence_state', payload: 'opaque-presence' }));
@@ -453,23 +519,43 @@ test('v20.1.0 through the Worker and migrated D1', async (t) => {
         assert.ok(b.frames.some((f) => f.type === 'new_ops' && f.latestSeq === 5));
         assert.ok(!a.frames.some((f) => f.type === 'new_ops' && f.latestSeq === 5));
         assert.ok(!other.frames.some((f) => f.type === 'new_ops' || f.type === 'presence_state'));
-        const closing = new Promise((resolve, reject) => {
-          const timeout = setTimeout(
-            () => reject(new Error('WebSocket revocation timed out')),
-            25000,
-          );
-          b.ws.addEventListener(
-            'close',
-            (event) => {
-              clearTimeout(timeout);
-              resolve(event.code);
-            },
-            { once: true },
-          );
-        });
-        const { body } = await post('/api/replace-token', alice.token, {});
-        assert.equal(await closing, 4003);
+        await post('/web/token/revoke', alice.token, {}, { expected: 401 });
+        await post(
+          '/web/token/revoke',
+          undefined,
+          {},
+          {
+            cookie: alice.cookie,
+            headers: { origin: 'https://other.example' },
+            expected: 403,
+          },
+        );
+        const closing = Promise.all([closeCode(a.ws), closeCode(b.ws)]);
+        assert.deepEqual(
+          (await post('/web/token/revoke', undefined, {}, { cookie: alice.cookie })).body,
+          { ok: true },
+        );
+        assert.deepEqual(await closing, [4003, 4003]);
         await call('/api/sync/status', { token: alice.token, expected: 401 });
+        await call('/api/sync/status', { token: paired, expected: 401 });
+        assert.deepEqual((await unclaimed()).body, { status: 'expired' });
+        assert.equal((await call('/web/me', { cookie: alice.cookie })).body.username, 'alice');
+        assert.equal(other.ws.readyState, 1);
+        await get('/api/sync/status', bob.token);
+        const replacement = (await post('/web/token', undefined, {}, { cookie: alice.cookie })).body
+          .token;
+        const newClaim = await approvePairing();
+        const newPaired = (await newClaim()).body.token;
+        for (const fresh of [replacement, newPaired]) {
+          const downloaded = await get('/api/sync/ops?sinceSeq=4', fresh);
+          assert.equal(downloaded.body.ops[0].op.id, 'ws-write');
+        }
+        const rotated = await open(replacement, 'C');
+        const rotatedClose = closeCode(rotated.ws);
+        const { body } = await post('/api/replace-token', replacement, {});
+        assert.equal(await rotatedClose, 4003);
+        await call('/web/me', { cookie: alice.cookie, expected: 401 });
+        await call('/api/sync/status', { token: newPaired, expected: 401 });
         alice.token = body.token;
         await get('/api/sync/status', alice.token);
       } finally {
@@ -479,12 +565,109 @@ test('v20.1.0 through the Worker and migrated D1', async (t) => {
   );
   await t.test('reset invalidates web and device access without erasing data', async () => {
     const before = await DB.prepare('SELECT COUNT(*) AS n FROM operations').first('n');
+    const { cookie } = await post('/web/login', undefined, {
+      username: 'alice',
+      code: currentCode(alice.uri, 1),
+    });
     await call('/web/reset', { method: 'POST', cookie: admin.cookie, body: { username: 'alice' } });
-    await call('/web/me', { cookie: alice.cookie, expected: 401 });
+    await call('/web/me', { cookie, expected: 401 });
     await call('/api/sync/status', { token: alice.token, expected: 401 });
     assert.equal(await DB.prepare('SELECT COUNT(*) AS n FROM operations').first('n'), before);
     await get('/api/sync/status', bob.token);
   });
+});
+
+test('local admin sign-in on an upgraded database', async (t) => {
+  const secret = randomBytes(32).toString('hex');
+  const origin = 'http://192.168.1.10:8787';
+  const { rawConfig } = experimental_readRawConfig({ config: 'wrangler.jsonc' });
+  const harness = createTestHarness({
+    workers: [
+      {
+        config: {
+          ...rawConfig,
+          define: { 'import.meta.localAdminLogin': 'true' },
+        },
+        secrets: { AUTH_SECRET: secret },
+      },
+    ],
+  });
+  t.after(() => harness.close());
+  await harness.listen();
+  const { DB } = await harness.getWorker().getEnv();
+  async function migrate(name) {
+    const sql = await readFile(new URL('../migrations/' + name, import.meta.url), 'utf8');
+    await DB.batch(unstable_splitSqlQuery(sql).map((part) => DB.prepare(part)));
+  }
+  await migrate('0001_initial.sql');
+  const admin = newEnrollment('operator', secret);
+  const member = newEnrollment('member', secret);
+  await DB.prepare(
+    'INSERT INTO users(username,admin,otp_secret,token_version) VALUES(?,1,?,7),(?,0,?,2)',
+  )
+    .bind('operator', admin.sealed, 'member', member.sealed)
+    .run();
+  const userId = await DB.prepare("SELECT id FROM users WHERE username='operator'").first('id');
+  function legacyToken(purpose, tokenVersion) {
+    const encode = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
+    const iat = Math.floor(Date.now() / 1000);
+    const claims = {
+      userId,
+      email: 'operator',
+      tokenVersion,
+      purpose,
+      iat,
+      exp: iat + 3600,
+      jti: crypto.randomUUID(),
+    };
+    const signed = encode({ alg: 'HS256', typ: 'JWT' }) + '.' + encode(claims);
+    return signed + '.' + createHmac('sha256', secret).update(signed).digest('base64url');
+  }
+  const prior = [6, 7].map((version) => ({
+    cookie: 'ss_session=' + legacyToken('web', version),
+    authorization: 'Bearer ' + legacyToken('device', version),
+    expected: version === 7 ? 200 : 401,
+  }));
+  await migrate('0002_device_revocation.sql');
+  for (const { cookie, authorization, expected } of prior) {
+    assert.equal(
+      (await harness.fetch(origin + '/web/me', { headers: { cookie } })).status,
+      expected,
+    );
+    assert.equal(
+      (await harness.fetch(origin + '/api/sync/status', { headers: { authorization } })).status,
+      expected,
+    );
+  }
+  const login = (username, code) =>
+    harness.fetch(origin + '/web/login', {
+      method: 'POST',
+      headers: { origin, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, code }),
+    });
+  assert.deepEqual(await (await harness.fetch(origin + '/web/login-options')).json(), {
+    localAdminLogin: true,
+  });
+  const signedIn = await login('operator', '');
+  assert.equal(signedIn.status, 200);
+  const cookie = signedIn.headers.get('set-cookie').split(';')[0];
+  assert.equal((await harness.fetch(origin + '/web/users', { headers: { cookie } })).status, 200);
+  assert.equal((await login('operator')).status, 200);
+  assert.equal((await login('unknown')).status, 401);
+  assert.equal((await login('member', '')).status, 401);
+  assert.equal((await login('operator', 'invalid')).status, 401);
+  for (const [name, enrollment] of [
+    ['operator', admin],
+    ['member', member],
+  ]) {
+    const code = currentCode(enrollment.uri);
+    assert.equal((await login(name, code)).status, 200);
+    assert.equal((await login(name, code)).status, 401);
+  }
+  for (let attempt = 0; attempt < 10; attempt++) {
+    assert.equal((await login('rate-limited', '')).status, 401);
+  }
+  assert.equal((await login('rate-limited', '')).status, 429);
 });
 
 test('default deployment leaves optional Capture routes disabled', async (t) => {

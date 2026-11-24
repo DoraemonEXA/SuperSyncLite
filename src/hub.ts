@@ -79,6 +79,19 @@ export class AccountHub extends DurableObject<Settings> {
     this.tail = result.catch(() => {});
     return result;
   }
+  async revokeDeviceTokens(userId: number, accountVersion: number) {
+    return this.serial(async () => {
+      const result = await this.env.DB.prepare(
+        `UPDATE users SET token_version=token_version+1, device_only_revocations=device_only_revocations+1
+         WHERE id=? AND account_version=?`,
+      )
+        .bind(userId, accountVersion)
+        .run();
+      if (!result.meta.changes) return false;
+      this.closeSockets();
+      return true;
+    });
+  }
   fetch(req: Request): Promise<Response> {
     return this.serial(() =>
       scope.run({ env: this.env, notify: (client, seq) => this.notify(client, seq) }, async () => {

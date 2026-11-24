@@ -21,13 +21,21 @@ type Tx = AccountTransaction;
 const CONNECT_TTL_MS = 10 * 60 * 1000;
 
 /** Lock before auth/code/grant rows. Sign-out locks the user; feature-off locks the key. */
-const lockCaptureUser = async (tx: Tx, userId: number): Promise<number | null> => {
-  const users = await tx.rows<Array<{ token_version: number }>>`
-    SELECT token_version FROM users WHERE id = ${userId} `;
-  if (!users[0]) return null;
+const lockCaptureUser = async (
+  tx: Tx,
+  userId: number,
+  expectedDeviceVersion?: number,
+): Promise<number | null> => {
+  const [user] = await tx.rows<Array<{ account_version: number; token_version: number }>>`
+    SELECT account_version, token_version FROM users WHERE id = ${userId}`;
+  if (
+    !user ||
+    (expectedDeviceVersion !== undefined && user.token_version !== expectedDeviceVersion)
+  )
+    return null;
   const keys = await tx.rows<Array<{ user_id: number }>>`
     SELECT user_id FROM capture_keys WHERE user_id = ${userId} AND disabled_at IS NULL`;
-  return keys.length ? users[0].token_version : null;
+  return keys.length ? user.account_version : null;
 };
 
 export const createCaptureConnectCode = async (
@@ -36,8 +44,8 @@ export const createCaptureConnectCode = async (
   now = Date.now(),
 ): Promise<{ code: string; expiresAt: number } | null> =>
   transaction(async (tx) => {
-    const tokenVersion = await lockCaptureUser(tx, userId);
-    if (tokenVersion === null || tokenVersion !== expectedTokenVersion) return null;
+    const tokenVersion = await lockCaptureUser(tx, userId, expectedTokenVersion);
+    if (tokenVersion === null) return null;
     const alphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
     const raw = Array.from(randomBytes(10), (b) => alphabet[b & 31]).join('');
     const expiresAt = now + CONNECT_TTL_MS;

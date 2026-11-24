@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "node scripts/dev.mjs",
     "types": "wrangler types",
     "check": "tsc --noEmit",
     "migrate:local": "wrangler d1 migrations apply DB --local",

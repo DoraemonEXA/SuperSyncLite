@@ -2,7 +2,16 @@ import QRCode from 'qrcode';
 import { newEnrollment, validName, verifiedStep } from './credentials';
 import { settings } from './context';
 import { statement } from './db';
-import { identify, signAccountToken, revocationWrites } from './auth';
+import { identify, signAccountToken, revocationWrites, type Identity } from './auth';
+import {
+  approveConnectRequest,
+  cancelConnectRequest,
+  CONNECT_REQUEST_ID_PATTERN,
+  getPendingConnectRequest,
+} from './connect/connect-request.store';
+
+const localAdminLogin = (import.meta as { localAdminLogin?: boolean }).localAdminLogin === true;
+
 export const json = (body: unknown, status = 200, headers: HeadersInit = {}) =>
   Response.json(body, { status, headers: { 'Cache-Control': 'no-store', ...headers } });
 export async function limited(key: string, max: number, window: number) {
@@ -17,8 +26,35 @@ export async function limited(key: string, max: number, window: number) {
   ).first<{ attempts: number; until_ms: number }>();
   return row && row.attempts > max ? Math.max(1, Math.ceil((row.until_ms - now) / 1000)) : 0;
 }
+
+async function webConnect(req: Request, path: string, user: Identity) {
+  const match = /^\/web\/connect\/([^/]+)(?:\/(approve|cancel))?$/.exec(path);
+  const expired = () => json({ error: '配对请求已过期或已使用，请在客户端重新发起连接。' }, 404);
+  if (!match || !CONNECT_REQUEST_ID_PATTERN.test(match[1])) return expired();
+  const [, id, action] = match;
+  if (req.method !== (action ? 'POST' : 'GET')) return expired();
+  // Browser sessions and bearer clients share the upstream per-route pairing quota.
+  const route = '/api/connect/requests/:id' + (action ? '/' + action : '');
+  const wait = await limited(
+    req.method + route + ':' + (req.headers.get('CF-Connecting-IP') ?? 'local'),
+    30,
+    900000,
+  );
+  if (wait) return json({ error: 'Too many attempts' }, 429, { 'Retry-After': String(wait) });
+  if (!action) {
+    const device = await getPendingConnectRequest(id);
+    return device ? json(device) : expired();
+  }
+  const done =
+    action === 'approve'
+      ? await approveConnectRequest(id, user)
+      : await cancelConnectRequest(id, user.userId);
+  return done ? json({ ok: true }) : expired();
+}
+
 export async function web(req: Request, path: string) {
   const env = settings();
+  if (path === '/web/login-options' && req.method === 'GET') return json({ localAdminLogin });
   const cookie = (req.headers.get('Cookie') ?? '').match(
     /(?:^|; *)ss_session=([A-Za-z0-9._-]+)/,
   )?.[1];
@@ -50,39 +86,50 @@ export async function web(req: Request, path: string) {
     '; HttpOnly; SameSite=Strict; Path=/' +
     (new URL(req.url).protocol === 'https:' ? '; Secure' : '');
   if (path === '/web/login' && req.method === 'POST') {
-    if (!validName(body?.username) || typeof body?.code !== 'string' || !/^\d{6}$/.test(body.code))
+    const code = body?.code;
+    const usernameOnly = localAdminLogin && (code === undefined || code === '');
+    if (
+      !validName(body?.username) ||
+      (!usernameOnly && (typeof code !== 'string' || !/^\d{6}$/.test(code)))
+    )
       return json({ error: 'Invalid credentials' }, 401);
     if (
       (await limited('ip:' + (req.headers.get('CF-Connecting-IP') ?? 'local'), 60, 300000)) ||
       (await limited('login:' + body.username.toLowerCase(), 10, 300000))
     )
       return json({ error: 'Too many attempts' }, 429, { 'Retry-After': '300' });
-    const row = await statement('SELECT * FROM users WHERE username=?', body.username).first<{
+    const row = await statement(
+      'SELECT id,username,otp_secret,account_version,admin FROM users WHERE username=?',
+      body.username,
+    ).first<{
       id: number;
       username: string;
       otp_secret: string;
-      token_version: number;
+      account_version: number;
       admin: number;
     }>();
-    const step = row ? verifiedStep(row.otp_secret, row.username, env.AUTH_SECRET, body.code) : -1;
-    if (
-      !row ||
-      step < 0 ||
-      !(
-        await statement(
-          'UPDATE users SET otp_step=? WHERE id=? AND otp_step<? AND token_version=?',
-          step,
-          row.id,
-          step,
-          row.token_version,
-        ).run()
-      ).meta.changes
-    )
+    if (!row || (usernameOnly && !row.admin))
       return json({ error: 'Invalid or already used code' }, 401);
+    if (!usernameOnly) {
+      const step = verifiedStep(row.otp_secret, row.username, env.AUTH_SECRET, code);
+      if (
+        step < 0 ||
+        !(
+          await statement(
+            'UPDATE users SET otp_step=? WHERE id=? AND otp_step<? AND account_version=?',
+            step,
+            row.id,
+            step,
+            row.account_version,
+          ).run()
+        ).meta.changes
+      )
+        return json({ error: 'Invalid or already used code' }, 401);
+    }
     return json({ username: row.username, admin: !!row.admin }, 200, {
       'Set-Cookie':
         'ss_session=' +
-        signAccountToken(row.id, row.username, row.token_version, 'web') +
+        signAccountToken(row.id, row.username, row.account_version, 'web') +
         flags +
         '; Max-Age=3600',
     });
@@ -95,6 +142,12 @@ export async function web(req: Request, path: string) {
     return json({ ok: true }, 200, { 'Set-Cookie': 'ss_session=' + flags + '; Max-Age=0' });
   if (path === '/web/token' && req.method === 'POST')
     return json({ token: signAccountToken(user.userId, user.username, user.tokenVersion) });
+  if (path === '/web/token/revoke' && req.method === 'POST') {
+    const hub = env.ACCOUNTS.getByName(String(user.userId));
+    const revoked = await hub.revokeDeviceTokens(user.userId, user.accountVersion);
+    return revoked ? json({ ok: true }) : json({ error: 'Sign in required' }, 401);
+  }
+  if (path.startsWith('/web/connect/')) return webConnect(req, path, user);
   if (!user.admin) return json({ error: 'Administrator required' }, 403);
   if (path === '/web/users' && req.method === 'GET')
     return json({

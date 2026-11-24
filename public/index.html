@@ -18,13 +18,16 @@
           /></label>
           <label
             >身份验证器动态码<input
+              id="code"
               name="code"
               required
               pattern="[0-9]{6}"
               maxlength="6"
               inputmode="numeric"
               autocomplete="one-time-code"
+              aria-describedby="localLoginHint"
           /></label>
+          <p id="localLoginHint" hidden>本地测试时，管理员可以将动态码留空。</p>
           <button>登录</button>
         </form>
       </section>
@@ -41,8 +44,11 @@
         <h1>我的同步</h1>
         <p id="who"></p>
         <label>Server URL<input id="serverUrl" readonly /></label>
-        <button id="token">显示 Access Token</button
-        ><textarea id="access" readonly hidden aria-label="Access Token"></textarea>
+        <div class="actions">
+          <button id="token">生成 Access Token</button>
+          <button id="revokeToken" class="secondary">撤销所有设备令牌</button>
+        </div>
+        <textarea id="access" readonly hidden aria-label="Access Token"></textarea>
       </section>
       <section id="admin" hidden>
         <h2>用户管理</h2>

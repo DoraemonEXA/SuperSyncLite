@@ -2,7 +2,7 @@
 
 在 Cloudflare Workers 上自托管 SuperSync。每个用户有独立的 D1 同步数据，一个账号可以连接多台运行原版 Super Productivity 的设备。网页管理员负责开户、交付身份验证器二维码和重置登录凭据。同步内容由客户端端到端加密。
 
-兼容基线为 Super Productivity **v20.1.0**，提交 `93d5249d51f4fcfb9ccaab14a89438ae52925a10`。账号入口按本项目要求使用用户名和六位 TOTP，普通用户与管理员使用相同的登录方式。设备配对和 Access Token 沿用原版客户端协议。[上游版本](https://github.com/super-productivity/super-productivity/releases/tag/v20.1.0) · [同步协议](https://github.com/super-productivity/super-productivity/blob/93d5249d51f4fcfb9ccaab14a89438ae52925a10/packages/shared-schema/src/supersync-http-contract.ts)
+兼容基线为 Super Productivity **v20.1.0**，提交 `93d5249d51f4fcfb9ccaab14a89438ae52925a10`。部署到 Cloudflare 后，所有账号都使用用户名和六位 TOTP 登录。设备配对和 Access Token 沿用原版客户端协议。[上游版本](https://github.com/super-productivity/super-productivity/releases/tag/v20.1.0) · [同步协议](https://github.com/super-productivity/super-productivity/blob/93d5249d51f4fcfb9ccaab14a89438ae52925a10/packages/shared-schema/src/supersync-http-contract.ts)
 
 ## 本机启动
 
@@ -20,7 +20,9 @@ node --env-file=.dev.vars scripts/admin.mjs init admin --local
 npm run dev
 ```
 
-用身份验证器扫描终端显示的二维码，然后打开 `http://localhost:8787`，使用 `admin` 和当前动态码登录。每个动态码只接受一次。管理员创建用户后，网页显示该用户专属的二维码，请私下交给本人扫描。
+打开 `http://localhost:8787`。使用 `npm run dev` 在本机或局域网测试时，已创建的管理员可以只填写用户名，将动态码留空。需要测试管理员 TOTP 时可扫描终端的二维码。普通用户始终需要输入动态码，每个动态码只接受一次。管理员创建用户后，网页显示该用户专属的二维码，请私下交给本人扫描。
+
+在 Windows 局域网中测试时，可用 `npm.cmd run dev -- --ip 192.168.1.10 --var PUBLIC_URL:http://192.168.1.10:8787` 启动，将示例 IP 替换为本机的局域网地址。能访问该地址并知道管理员用户名的设备即可登录本地管理页面。
 
 ## 部署到 Cloudflare
 
@@ -36,12 +38,13 @@ node scripts/admin.mjs init admin --remote --config wrangler.production.jsonc
 npx wrangler deploy --config wrangler.production.jsonc
 ```
 
-部署完成后访问 `/health` 检查 D1 连接，再通过 HTTPS 打开首页登录。请备份 D1 以及对应的生产密钥。同步数据加密密码由用户在客户端设置和保管。
+升级已有服务时，先执行上面的远程 D1 迁移命令，再发布 Worker。迁移 `0002_device_revocation.sql` 为已有账号启用独立的设备令牌撤销。部署完成后访问 `/health` 检查 D1 连接，再通过 HTTPS 打开首页登录。请备份 D1 以及对应的生产密钥。同步数据加密密码由用户在客户端设置和保管。
 
 ## 接入设备与找回账号
 
 - **浏览器配对**。在原版客户端打开同步设置，选择 SuperSync 和 **Change server**，填写本服务地址，点击 **Sign in with SuperSync**。在弹出的网页输入用户名和 TOTP，核对两个页面上的配对码后批准连接。首次同步设置加密密码，在其他设备输入同一密码即可解密任务。
-- **手动填写令牌**。登录服务首页，点击 **显示 Access Token**，将页面上的 **Server URL** 和 **Access Token** 填入客户端的 **Configure Sync**。选择 **SuperSync (Beta)** 后可见令牌字段，服务器地址位于高级设置。令牌用于设备连接，二维码用于身份验证器。
+- **手动填写令牌**。登录服务首页，点击 **生成 Access Token**，将页面上的 **Server URL** 和 **Access Token** 填入客户端的 **Configure Sync**。选择 **SuperSync (Beta)** 后可见令牌字段，服务器地址位于高级设置。
+- **撤销并重新授权设备**。在首页点击 **撤销所有设备令牌** 并确认。手动配置和浏览器配对的设备都会断开，已批准但尚未领取的配对也会失效。网页会话、已有同步数据和 Capture 授权会保留。需要恢复同步时，点击 **生成 Access Token** 并在设备上填写新令牌，或在客户端重新发起配对并批准连接。
 - **普通用户遗失身份验证器**。管理员登录后台，在该用户旁选择 **重置身份验证器**，交付新二维码。重置保留同步数据，并撤销原动态码、网页会话、设备令牌及 Capture 授权。
 - **管理员遗失身份验证器**。部署者在配置好同一 `AUTH_SECRET` 的本机运行 `node scripts/admin.mjs recover admin --remote` 获取新二维码。本地环境使用 `node --env-file=.dev.vars scripts/admin.mjs recover admin --local`。
 
@@ -72,6 +75,6 @@ npm run test:client
 
 ## 跟进上游
 
-[版本检测工作流](.github/workflows/upstream.yml) 在 GitHub 默认分支每天北京时间 **09:17** 检查最新稳定版，也可通过 **Actions → Check upstream stable release → Run workflow** 手动触发。本机执行 `npm run check:upstream` 可取得同一份报告。报告列出锁定版本、最新版本、提交和差异链接。升级由维护者发起，重新运行兼容验收后再更新 [upstream.json](upstream.json)。
+[版本检测工作流](.github/workflows/upstream.yml) 在 GitHub 默认分支每周一北京时间 **09:17** 检查最新稳定版，也可通过 **Actions → Check upstream stable release → Run workflow** 手动触发。本机执行 `npm run check:upstream` 可取得同一份报告。报告列出锁定版本、最新版本、提交和差异链接。升级由维护者发起，重新运行兼容验收后再更新 [upstream.json](upstream.json)。
 
 服务移植了上游的同步协议、路由、Capture 及 OAuth 处理逻辑。[上游服务端源码](https://github.com/super-productivity/super-productivity/tree/93d5249d51f4fcfb9ccaab14a89438ae52925a10/packages/super-sync-server/src) · [上游许可证](src/upstream-LICENSE)

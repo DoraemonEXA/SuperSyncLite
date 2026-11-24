@@ -5,6 +5,7 @@ export interface Identity {
   userId: number;
   username: string;
   tokenVersion: number;
+  accountVersion: number;
   admin: number;
 }
 const header = Buffer.from('{"alg":"HS256","typ":"JWT"}').toString('base64url');
@@ -52,11 +53,12 @@ export async function checkToken(
   if (!(c.exp > Date.now() / 1000))
     return { user: null, error: 'Token expired. Please log in again to get a new token.' };
   const user = await statement(
-    'SELECT id AS userId, username, admin, token_version AS tokenVersion FROM users WHERE id=?',
+    'SELECT id AS userId, username, admin, token_version AS tokenVersion, account_version AS accountVersion FROM users WHERE id=?',
     c.userId,
   ).first<Identity>();
   if (!user) return { user: null, error: 'Account unavailable' };
-  if (user.tokenVersion !== c.tokenVersion)
+  const version = purpose === 'web' ? user.accountVersion : user.tokenVersion;
+  if (version !== c.tokenVersion)
     return { user: null, error: 'Token was revoked. Please log in again to get a new token.' };
   return { user };
 }

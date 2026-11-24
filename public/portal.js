@@ -3,10 +3,9 @@ const requestId = new URLSearchParams(location.search).get('r');
 const show = (id, v) => {
   el(id).hidden = !v;
 };
-async function api(path, { method = 'GET', body, token } = {}) {
+async function api(path, { method = 'GET', body } = {}) {
   const headers = {};
   if (body !== undefined) headers['Content-Type'] = 'application/json';
-  if (token) headers.Authorization = 'Bearer ' + token;
   const r = await fetch(path, {
     method,
     headers,
@@ -28,14 +27,12 @@ function action(fn) {
     }
   };
 }
-const devicePath = '/api/connect/requests/' + encodeURIComponent(requestId ?? '');
-let deviceToken;
+const devicePath = '/web/connect/' + encodeURIComponent(requestId ?? '');
 async function session(user) {
   show('login', false);
   show('logout', true);
   if (requestId) {
-    deviceToken = (await post('/web/token')).token;
-    const device = await api(devicePath, { token: deviceToken });
+    const device = await api(devicePath);
     el('deviceName').textContent = device.deviceName + ' · ' + device.platform;
     el('match').textContent = device.matchCode;
     show('device', true);
@@ -81,10 +78,28 @@ el('signin').onsubmit = action(async (e) => {
   f.reset();
   await session(user);
 });
-el('token').onclick = action(async () => {
+function tokenAction(fn) {
+  return action(async () => {
+    el('token').disabled = el('revokeToken').disabled = true;
+    try {
+      await fn();
+    } finally {
+      el('token').disabled = el('revokeToken').disabled = false;
+    }
+  });
+}
+el('token').onclick = tokenAction(async () => {
   el('access').value = (await post('/web/token')).token;
   show('access', true);
   el('access').select();
+});
+el('revokeToken').onclick = tokenAction(async () => {
+  if (!confirm('撤销此账号的所有设备令牌？手动配置和已配对的设备都需要重新授权。')) return;
+  await post('/web/token/revoke');
+  el('access').value = '';
+  show('access', false);
+  el('status').textContent =
+    '已撤销所有设备令牌。可以生成新的 Access Token，也可以在客户端重新配对。';
 });
 el('logout').onclick = action(async () => {
   await post('/web/logout');
@@ -98,8 +113,7 @@ el('create').onsubmit = action(async (e) => {
 });
 for (const suffix of ['approve', 'cancel'])
   el(suffix).onclick = action(async () => {
-    await api(devicePath + '/' + suffix, { method: 'POST', token: deviceToken });
-    deviceToken = undefined;
+    await post(devicePath + '/' + suffix);
     show('device', false);
     el('status').textContent =
       suffix === 'approve' ? '设备已获授权，可以返回 Super Productivity。' : '已拒绝本次连接。';
@@ -107,6 +121,12 @@ for (const suffix of ['approve', 'cancel'])
 try {
   await session(await api('/web/me'));
 } catch (err) {
-  if (el('logout').hidden) show('login', true);
-  else el('status').textContent = err.message;
+  if (el('logout').hidden) {
+    const options = await api('/web/login-options').catch(() => ({}));
+    if (options.localAdminLogin) {
+      el('code').required = false;
+      show('localLoginHint', true);
+    }
+    show('login', true);
+  } else el('status').textContent = err.message;
 }

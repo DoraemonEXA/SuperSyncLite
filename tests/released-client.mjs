@@ -56,8 +56,12 @@ try {
     headless: true,
   });
   const errors = [];
+  let portalTokenRequests = 0;
   async function client() {
     const context = await browser.newContext({ locale: 'en-US' });
+    context.on('request', (req) => {
+      if (req.method() === 'POST' && req.url() === addr + '/web/token') portalTokenRequests++;
+    });
     context.on('page', (p) => p.on('pageerror', (err) => errors.push(err.message)));
     const page = await context.newPage();
     await page.goto(appUrl);
@@ -112,11 +116,32 @@ try {
   await a.page.getByText(second, { exact: true }).first().waitFor({ timeout: 90000 });
   const portal = await a.page.context().newPage();
   await portal.goto(addr);
-  await portal.getByRole('button', { name: '显示 Access Token' }).click();
+  const generate = portal.getByRole('button', { name: '生成 Access Token' });
+  const revoke = portal.getByRole('button', { name: '撤销所有设备令牌' });
+  await generate.waitFor();
+  assert.equal(portalTokenRequests, 0, 'Opening the portal or pairing page issued a manual token');
+  await generate.click();
   const access = portal.getByLabel('Access Token', { exact: true });
+  await access.waitFor({ state: 'visible' });
+  const oldToken = await access.inputValue();
+  assert.ok(oldToken.length > 0);
+  portal.once('dialog', (dialog) => dialog.dismiss());
+  await revoke.click();
+  assert.equal(await access.inputValue(), oldToken);
+  portal.once('dialog', (dialog) => dialog.accept());
+  await revoke.click();
+  await access.waitFor({ state: 'hidden' });
+  assert.equal(await access.inputValue(), '');
+  const oldStatus = await portal.request.get(addr + '/api/sync/status', {
+    headers: { Authorization: 'Bearer ' + oldToken },
+  });
+  assert.equal(oldStatus.status(), 401);
+  await portal.reload();
+  await generate.click();
   await access.waitFor({ state: 'visible' });
   const token = await access.inputValue();
   assert.ok(token.length > 0, 'Portal returned an empty token');
+  assert.notEqual(token, oldToken);
   const manual = await browser.newPage({ locale: 'en-US' });
   manual.on('pageerror', (err) => errors.push(err.message));
   await manual.goto(appUrl);
@@ -138,7 +163,7 @@ try {
   await manual.getByText(second, { exact: true }).first().waitFor({ timeout: 60000 });
   assert.deepEqual(errors, []);
   console.log(
-    'Verified the released web client: two TOTP approvals, manual Server URL and Access Token, encryption, and task synchronization in both directions.',
+    'Verified two TOTP pairings, bidirectional encrypted sync, portal token revocation, and manual reconnection with a regenerated token in the released web client.',
   );
 } finally {
   await browser?.close();
