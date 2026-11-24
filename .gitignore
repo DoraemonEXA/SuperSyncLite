@@ -33,6 +33,7 @@ Thumbs.db
 .env.*
 .dev.vars*
 !.dev.vars.example
+wrangler.production.jsonc
 
 # typescript
 *.tsbuildinfo

@@ -30,10 +30,10 @@ npm run dev
 4. 在有目标账号权限的 PowerShell 中运行以下命令。将 `AUTH_SECRET` 按原值注入本机环境后执行，二维码只显示在当前终端。首次写入 Worker secret 时，Wrangler 可能提示创建同名 Worker。
 
 ```powershell
-npx wrangler d1 migrations apply DB --remote
-$env:AUTH_SECRET | npx wrangler secret put AUTH_SECRET
-node scripts/admin.mjs init admin --remote
-npx wrangler deploy
+npx wrangler d1 migrations apply DB --remote --config wrangler.production.jsonc
+$env:AUTH_SECRET | npx wrangler secret put AUTH_SECRET --config wrangler.production.jsonc
+node scripts/admin.mjs init admin --remote --config wrangler.production.jsonc
+npx wrangler deploy --config wrangler.production.jsonc
 ```
 
 部署完成后访问 `/health` 检查 D1 连接，再通过 HTTPS 打开首页登录。请备份 D1 以及对应的生产密钥。同步数据加密密码由用户在客户端设置和保管。

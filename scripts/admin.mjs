@@ -7,9 +7,18 @@ import { spawnSync } from 'node:child_process';
 const [mode, username, target, ...extra] = process.argv.slice(2);
 if (
   extra.length &&
-  !(target === '--local' && extra.length === 2 && extra[0] === '--persist-to' && extra[1])
-)
-  throw new Error('Only --local accepts --persist-to DIRECTORY');
+  !(
+    target === '--local' &&
+    extra.length === 2 &&
+    extra[0] === '--persist-to' &&
+    extra[1]
+  ) &&
+  !(target === '--remote' && extra.length === 2 && extra[0] === '--config' && extra[1])
+) {
+  throw new Error(
+    'Usage: init|recover USERNAME --local [--persist-to DIRECTORY] or --remote [--config FILE]',
+  );
+}
 if (
   !['init', 'recover'].includes(mode) ||
   !validName(username) ||
@@ -58,10 +67,13 @@ try {
     ],
     { stdio: ['inherit', 'pipe', 'pipe'] },
   );
-  if (r.status !== 0)
+  if (r.status !== 0) {
+    const detail = r.stderr?.toString().trim();
     throw new Error(
-      'D1 provisioning failed. Check the migration, admin name, target database and Wrangler credentials.',
+      'D1 provisioning failed. Check the migration, admin name, target database and Wrangler credentials.' +
+        (detail ? '\n' + detail : ''),
     );
+  }
   console.log(await terminalEnrollmentQr(uri));
 } finally {
   unlinkSync(file);
